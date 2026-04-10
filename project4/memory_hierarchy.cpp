@@ -138,7 +138,9 @@ int CacheLevel::access(uint64_t addr, char type, uint64_t cycle) {
         }
     }
 
-    if (hit_way != -1) {
+    bool is_miss = (hit_way == -1);
+
+    if (!is_miss) {
         // Hit handling
         hits++;
         CacheLine& line = set[hit_way];
@@ -147,13 +149,66 @@ int CacheLevel::access(uint64_t addr, char type, uint64_t cycle) {
         }
         line.is_prefetched = false; // consumed
         policy->onHit(set, hit_way, cycle);
-        return lat;
+    } else {
+        // Miss handling
+        misses++;
+
+        // Find an invalid line first
+        int target_way = -1;
+        for (int way = 0; way < (int)config.associativity; ++way) {
+            if (!set[way].valid) {
+                target_way = way;
+                break;
+            }
+        }
+
+        // If none invalid, select victim
+        if (target_way == -1) {
+            target_way = policy->getVictim(set);
+            if (target_way < 0 || target_way >= (int)config.associativity) {
+                target_way = 0;
+            }
+            write_back_victim(set[target_way], index, cycle);
+        }
+
+        // Fetch block from next level (if any)
+        if (next_level) {
+            lat += next_level->access(addr, type, cycle);
+        }
+
+        // Install new line
+        CacheLine& newline = set[target_way];
+        newline.tag = tag;
+        newline.valid = true;
+        newline.dirty = (type == 'w');
+        newline.is_prefetched = false;
+        policy->onMiss(set, target_way, cycle);
     }
 
-    // Miss handling
-    misses++;
+    // Task 3: call prefetcher on every access (hit or miss) for maximum
+    // coverage of sequential and strided patterns.
+    std::vector<uint64_t> pf_addrs = prefetcher->calculatePrefetch(addr, is_miss);
+    for (uint64_t pf_addr : pf_addrs) {
+        install_prefetch(pf_addr, cycle);
+    }
 
-    // Find an invalid line first
+    return lat;
+}
+
+void CacheLevel::install_prefetch(uint64_t addr, uint64_t cycle) {
+    uint64_t index = get_index(addr);
+    uint64_t tag   = get_tag(addr);
+
+    if (index >= num_sets) return;
+
+    std::vector<CacheLine>& set = sets[index];
+
+    // If block is already present (demand or prior prefetch), skip.
+    for (int way = 0; way < (int)config.associativity; ++way) {
+        if (set[way].valid && set[way].tag == tag) return;
+    }
+
+    // Find an invalid slot first.
     int target_way = -1;
     for (int way = 0; way < (int)config.associativity; ++way) {
         if (!set[way].valid) {
@@ -162,39 +217,28 @@ int CacheLevel::access(uint64_t addr, char type, uint64_t cycle) {
         }
     }
 
-    // If none invalid, select victim
+    // No free slot — select and possibly write back a victim.
     if (target_way == -1) {
         target_way = policy->getVictim(set);
-        if (target_way < 0 || target_way >= (int)config.associativity) {
+        if (target_way < 0 || target_way >= (int)config.associativity)
             target_way = 0;
-        }
         write_back_victim(set[target_way], index, cycle);
     }
 
-    // Fetch block from next level (if any)
+    // Fetch the prefetched block from the next level.
     if (next_level) {
-        lat += next_level->access(addr, type, cycle);
+        next_level->access(addr, 'r', cycle);
     }
 
-    // Install new line
-    CacheLine& newline = set[target_way];
-    newline.tag = tag;
-    newline.valid = true;
-    newline.dirty = (type == 'w');
-    newline.is_prefetched = false;
+    // Install as a clean, prefetched line.
+    CacheLine& line  = set[target_way];
+    line.tag         = tag;
+    line.valid       = true;
+    line.dirty       = false;
+    line.is_prefetched = true;
     policy->onMiss(set, target_way, cycle);
 
-    return lat;
-}
-
-void CacheLevel::install_prefetch(uint64_t addr, uint64_t cycle) {
-    // TODO: Task 3
-    // Implement a prefetch fill path similar to the miss path in access(), but
-    // treat prefetched lines as clean and mark is_prefetched = true.
-    // If you evict a dirty victim during prefetch installation, reuse
-    // write_back_victim(...) instead of duplicating that logic.
-    (void)addr;
-    (void)cycle;
+    prefetch_issued++;
 }
 
 void CacheLevel::printStats() {
