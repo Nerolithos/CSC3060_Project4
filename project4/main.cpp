@@ -89,20 +89,13 @@ int main(int argc, char* argv[]) {
         l2_cfg.latency = l1_cfg.latency * 4;
         l2_cfg.policy_name = positional_args.size() > 2 ? positional_args[2] : l1_cfg.policy_name;
         l2_cfg.prefetcher = positional_args.size() > 3 ? positional_args[3] : "None";
-
-        // TODO: Task 2
-        // When --enable-l2 is passed, create the L2 cache and connect it to memory:
-        (void)l2_cfg;
+        l2 = new CacheLevel("L2", l2_cfg, memory);
     }
 
     MemoryObject* l1_next = memory;
 
     if (enable_l2) {
-        // TODO: Task 2
-        // After creating L2 above, route L1 misses to L2 instead of main memory:
-        cerr << "Error: --enable-l2 requested, but Task 2 L2 hookup is still TODO in project4/main.cpp" << endl;
-        delete memory;
-        return 1;
+        l1_next = l2;
     }
 
     CacheLevel* l1 = new CacheLevel("L1", l1_cfg, l1_next);
