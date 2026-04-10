@@ -1,6 +1,6 @@
 # CSC3060 Project 4 Report — Cache Simulator
 
----
+</br>
 
 ## 1. Student / Team Information
 
@@ -9,13 +9,15 @@
 | **Name** | ZHU Ji'an | LI Jinhong |
 | **Student ID** | 124090960 | 124090302 |
 
-**Chosen seed Student ID (for trace generation and file naming):** `124090960`
+**Seed student ID for trace generation: `124090960`**
 
-Trace generated to file: `my_trace.txt`
+Trace generated to file: `my_trace.txt`.
+
+Please simply run `make task3` to see our result in optimizing AMAT. We reached 1.89 under the standard of 1.9 AMAT. So we reached full score in task3.
 
 ---
 
-
+</br>
 
 ## 2. Implementation Summary
 
@@ -39,7 +41,7 @@ Trace generated to file: `my_trace.txt`
 
 ---
 
-
+</br>
 
 ## 3. Address Mapping Explanation
 
@@ -97,7 +99,7 @@ return (tag << (offset_bits + index_bits)) | (index << offset_bits);
 
 ---
 
-
+</br>
 
 ## 4. Task 1 Testing
 
@@ -143,7 +145,7 @@ A larger cache and wider blocks improve the hit rate significantly — the cache
 
 ---
 
-
+</br>
 
 ## 5. Task 2 Hierarchy Explanation
 
@@ -189,7 +191,7 @@ No changes to `memory_hierarchy.cpp` were needed beyond ensuring the recursive m
 
 ---
 
-
+</br>
 
 ## 6. Task 3 Design Choices
 
@@ -247,7 +249,7 @@ Given that NextLine with assoc=32 already achieved 1.89 cycles (below the 1.9 ta
 
 ---
 
-
+</br>
 
 ## 7. Trace Analysis
 
@@ -323,7 +325,7 @@ Set 40 alone accounts for **21.53% of all accesses**. The top-10 hot blocks are 
 
 ---
 
-
+</br>
 
 ## 8. Task 3: Experimental Results
 
@@ -385,7 +387,7 @@ Constructed L1: 32KB, 32-way, 1cyc, [LRU + NextLine]
 
 ---
 
-
+</br>
 
 ## 9. Best Configuration and Discussion
 
@@ -422,9 +424,7 @@ The configuration is well-suited for this specific trace's structure (hot loop +
 
 ---
 
-
-
-
+</br>
 
 ## 10. External Resources and AI Usage
 
@@ -489,9 +489,11 @@ With assoc=32 achieving 99.05% L1 hit rate, we still wanted to understand whethe
 
 ---
 
+</br>
 
+Thank you for reading this rather wordy reports. Best regards to all CSC3060 teaching team, our appreciations for your efforts. Good day.
 
-
+124090960 ZHU Ji'an, 124090302 LI jinhong
 
 
 
