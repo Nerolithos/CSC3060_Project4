@@ -251,6 +251,8 @@ Given that NextLine with assoc=32 already achieved 1.89 cycles (below the 1.9 ta
 
 ## 7. Trace Analysis
 
+Now we run `trace_analyzer.py`.
+
 ### Basic Access Mix
 
 | Metric | Value |
@@ -316,7 +318,7 @@ Set 40 alone accounts for **21.53% of all accesses**. The top-10 hot blocks are 
 |---|---|---|
 | Stride-1 = 60.91% | Use **NextLine** prefetcher | Unconditional next-block prefetch maximizes sequential coverage |
 | Set 40 has 20 hot blocks, assoc=8 only holds 8 | Raise **TASK3_ASSOC to 32** | No policy can fix a geometric capacity shortage; 32 ways holds all 20 blocks with room to spare |
-| Scan phases touch 512 unique blocks/window | SRRIP or BIP considered to limit scan pollution | But once assoc=32 resolves thrashing, LRU already achieves 99.05% hit rate |
+| Scan phases touch 512 unique blocks/window | SRRIP or BIP considered to limit scan pollution | **But once assoc=32 resolves thrashing, LRU already achieves 99.05% hit rate.** |
 | Total footprint ~77 KB > L1 (32 KB) but < L2 (128 KB) | Enable **L2** | L2 absorbs both demand misses and prefetch-fill traffic cheaply (4 cycles vs 100) |
 
 ---
@@ -327,25 +329,42 @@ Set 40 alone accounts for **21.53% of all accesses**. The top-10 hot blocks are 
 
 ### Full Comparison Table
 
+Note: You may notice in the list below that there's **NO L2 prefetch**, I'll talk about this later.
+
 | \ | L1 Assoc | L1 Policy | L1 Prefetch | L2 Enabled | L2 Policy | L1 Hit % | L2 Hit % | AMAT |
 |---|---|---|---|---|---|---|---|---|
 | Baseline | 8 | LRU | None | Yes | LRU | 30.02% | 71.42% | 24.43 |
-| +NextLine (no L2) | 8 | LRU | NextLine | No | — | 73.23% | — | 27.77 |
-| +L2 +SRRIP +NextLine | 8 | SRRIP | NextLine | Yes | SRRIP | 74.32% | 77.82% | 2.98 |
-| +L2 +BIP +NextLine | 8 | BIP | NextLine | Yes | LRU | 74.10% | 76.90% | 2.80 |
-| assoc=16, LRU+NextLine | 16 | LRU | NextLine | Yes | LRU | 85.10% | 72.41% | 2.45 |
-| **assoc=32, LRU+NextLine** | **32** | **LRU** | **NextLine** | **Yes** | **LRU** | **99.05%** | **60.16%** | **1.89** |
+| +L2 +SRRIP +NextLine       | 8        | SRRIP     | NextLine     | Yes        | SRRIP     | 74.32%     | 77.82%     | 2.98     |
+| +L2 +BIP +NextLine         | 8        | BIP       | NextLine     | Yes        | LRU       | 74.10%     | 76.90%     | 2.80     |
+| assoc=16, LRU+NextLine     | 16       | LRU       | NextLine     | Yes        | LRU       | 85.10%     | 72.41%     | 2.45     |
+| **assoc=32, LRU+NextLine** | **32**   | **LRU**   | **NextLine** | **Yes**    | **LRU**   | **99.05%** | **60.16%** | **1.89** |
+
+Note that if we increase associativity to 64, AMAT stays at 1.89. If we increase even more, and the AMAT will increase. So **the "best solution" shown above is NOT unique**, assoc=64 is also good enough.
 
 ### Key Observations
 
-**Why "NextLine without L2" is worse than baseline:**  
-Adding NextLine at assoc=8 with no L2 issued 4,199 prefetch requests — each a miss going to main memory at 100 cycles. Even though L1 hit rate rose from 30% to 73%, the additional prefetch-fill traffic overwhelmed those gains. Total cycles went from 146,364 (baseline) to 166,392 (with prefetch, no L2). L2 is a prerequisite for prefetching to be beneficial.
+**Note: NextLine without L2 makes it even worse**  
+We've already know from the "Trace Analysis" part that we **SHOULD** Enable **L2**. Further testing also shows that deleting L2 will cause larger AMAT even with prefetcher (**27.77** > 24.43).
 
 **Why the jump from assoc=8 to assoc=16 is moderate (2.98 → 2.45):**  
 At assoc=16, set 40 still can only hold 16 of the 20 hot blocks. Four blocks are still being evicted on every hot-loop cycle, causing persistent conflict misses.
 
 **Why assoc=32 produces a near-perfect hit rate (99.05%):**  
 With 32 ways, all 20 hot blocks fit in set 40 simultaneously (12 ways to spare). Every hot-loop access is now an L1 hit. Combined with NextLine prefetching covering the sequential-scan phases, L1 misses drop from 1,539 (assoc=8) to just 57 (assoc=32) — a 96% reduction.
+
+**Why L2 prefetch is set to None:**  
+After reaching assoc = 32, we also tested enabling NextLine at the L2 level:
+
+| L2 Prefetch | L1 Hit % | L2 Hit % | AMAT |
+|---|---|---|---|
+| None | 99.05% | 60.16% | **1.89** |
+| NextLine | 99.05% | 60.16% | 1.90 |
+
+Note that, We've also tried these: **if assoc = 16**, with or without L2 prefetch yields AMAT: 4.26 and 3.68 each. Similarly, **if assoc = 64**, with or without L2 prefetch yields both 1.89.
+
+Enabling L2 prefetch made AMAT marginally *worse* or at least not any better. The reason is structural: with **L1 hit rate already at 99.05%**, only 57 demand accesses per run reach L2. These 57 are almost **ALL compulsory misses**, so these blocks have never been in cache at any level. Prefetching the block after a compulsory miss is rarely useful, because the sequential scan will naturally arrive at that block on its own shortly afterward. Meanwhile, L2 NextLine issues additional prefetch requests that miss in L2 and fall through to main memory **at 100 cycles each, adding unnecessary traffic**. In this configuration, **L2 prefetching creates cost without benefit** — so `TASK3_L2_PREFETCH = None` is the correct and measured choice.
+
+Note: This is very intriguing to us, since we've never actually thought that prefetch could bring negative effect due to burdening the BUS while revising our 128-page PPT. This is unexpected fuition! We understand prefetching far more thouroughly than just reading PPT.
 
 **Final output (`make task3`):**
 ```
@@ -383,16 +402,16 @@ TASK3_L2_PREFETCH = None
 
 ### Why It Performs Well
 
-**Associativity = 32 is the decisive factor.**  
+**Associativity = 32 is decisive.**  
 The trace has a hot phase where 20 blocks repeatedly access set 40. With standard assoc=8, this causes perpetual conflict-miss thrashing that no replacement policy can cure. Raising to 32 ways eliminates the thrashing entirely, pushing L1 hit rate to 99.05%.
 
-**NextLine prefetcher covers sequential phases.**  
+**NextLine covers 60.91% scenarios.**  
 With 60.91% stride-1 transitions, nearly every next access is the immediately following block. NextLine prefetches that block in advance, converting cold misses in sequential scan phases into L1 hits. The 3,059 prefetch issues at L1 correspond directly to future hits.
 
-**L2 makes prefetching affordable.**  
-Every prefetch that misses in L1 costs only 4 cycles (L2 latency) rather than 100 cycles (main memory). This is why the same NextLine prefetcher that hurt performance without L2 (AMAT 27.77) is beneficial with L2 (AMAT 1.89).
+**Including L2 allows L1-prefetching.**  
+Every prefetch that misses in L1 costs only 4 cycles (L2 latency) rather than 100 cycles (main memory). This is why the same L1-NextLine prefetcher that hurt performance without L2 (AMAT 27.77) is beneficial with L2 (AMAT 1.89).
 
-**LRU is optimal at high associativity.**  
+**LRU is best for high associativity.**  
 With 32 ways and a hot working set of only 20 blocks, LRU's simple recency ordering keeps all hot blocks resident. SRRIP's scan-protection is irrelevant because the hot set fits comfortably and sequential regions are pre-covered by the prefetcher.
 
 ### Residual Misses and Limitations
@@ -405,43 +424,17 @@ The configuration is well-suited for this specific trace's structure (hot loop +
 
 
 
-## 10. AI-Assisted Optimization — Journey, Bugs, and Breakthroughs
 
-During Task 3, I used **GitHub Copilot (Claude Sonnet 4.6)** as a reasoning partner at each stuck point. Below is an honest account of the full optimization process, including mistakes made and how AI helped resolve them.
 
-### 10.1 Starting Point: AMAT 2.98 — Why Wasn't It Better?
+## 10. External Resources and AI Usage
 
-After implementing SRRIP, BIP, NextLine, Stride, and `install_prefetch`, the first reasonable-looking configuration gave:
-
-```
-assoc=8, SRRIP + NextLine, --enable-l2 SRRIP None  →  AMAT: 2.98 cycles
-```
-
-I tried BIP + NextLine (2.80), LRU + None (24.43), BIP + None — none moved meaningfully past ~2.80 at assoc=8. Rather than continuing blind trial-and-error, I used AI to diagnose the structural problem.
-
----
-
-### 10.2 Bug #1 — Prefetching Without L2 Made AMAT Worse
-
-Early on, I expected NextLine to help even without L2, since the trace is 60% stride-1:
-
-```
-assoc=8, LRU + NextLine, no L2  →  AMAT: 27.77 cycles  (worse than baseline 24.43!)
-```
-
-> **Me:** *"I added NextLine prefetching but AMAT got worse (27.77 vs 24.43). The L1 hit rate did improve from 30% to 73%, so why is AMAT higher?"*
->
-> **Copilot:** *"The hit rate improvement is real, but look at the miss side. Your prefetcher issued 4,199 prefetch requests, each a miss going to main memory at 100 cycles each. Even though demand hits improved, the total cycle count exploded because you added thousands of expensive memory accesses that didn't exist before. Without L2 acting as a 4-cycle buffer, the prefetcher is scheduling thousands of 100-cycle penalties on top of the demand traffic. With L2, the same prefetch fill costs only 4 cycles. The lesson: a prefetcher needs a fast lower level to absorb its misses. Without L2, aggressive prefetching is actively harmful."*
-
-**Lesson learned:** Prefetching and L2 are a package deal. After enabling L2, the same NextLine configuration dropped from 27.77 to 2.98 — a 9× improvement.
-
----
+During Task 3, we used **Claude Sonnet 4.6**. Below lists some of our usage of AI during the full optimization process, including mistakes and how AI helped resolve them. We can't list all of the questions since we would like to talk about what we gained from using AI, in detail.
 
 
 
-### 10.3 Bug #2 — SRRIP `getVictim` Recursive Stack Overflow
+### Bug — SRRIP `getVictim` Recursive Stack Overflow
 
-My first SRRIP implementation used recursion for the age-and-retry loop:
+Our first SRRIP implementation used recursion for the age-and-retry loop:
 
 ```cpp
 // FIRST (buggy) version
@@ -454,11 +447,7 @@ int SRRIPPolicy::getVictim(std::vector<CacheLine>& set) {
 }
 ```
 
-It worked on simple tests but crashed on traces with sustained full-set misses.
-
-> **Me:** *"My SRRIP getVictim uses recursion — ages all lines then calls itself. Sometimes it crashes on longer traces. Is recursion the right pattern here?"*
->
-> **Copilot:** *"The recursion is logically correct but structurally risky. In the worst case you need 3 full aging passes to reach RRPV=3 — that's fine. But if any bug prevents RRPV from reaching 3, the recursion is infinite. The standard implementation uses a `while(true)` loop: scan for RRPV==3, age all by +1 if none found, repeat. It terminates because RRPV is bounded at 3 and aging makes guaranteed progress. It also avoids all stack depth risk."*
+It worked on simple tests but crashed on traces with sustained full-set misses. We did not immediately understand why — the logic seemed correct — so we brought the code to Copilot and asked: *"My SRRIP getVictim uses recursion — ages all lines then calls itself. Sometimes it crashes on longer traces. Is recursion the right pattern here?"* Copilot replied that *"the recursion is logically correct but structurally risky. In the worst case you need 3 full aging passes to reach RRPV=3 — that's fine. But if any bug prevents RRPV from reaching 3, the recursion is infinite. The standard implementation uses a `while(true)` loop: scan for RRPV==3, age all by +1 if none found, repeat. It terminates because RRPV is bounded at 3 and aging makes guaranteed progress. It also avoids all stack depth risk."* This made us understand that for retry-until-found patterns with bounded state, an explicit loop is always safer and more idiomatic than recursion.
 
 Fixed version:
 
@@ -479,15 +468,11 @@ The `< 3` guard also prevents wrap-around. Crash eliminated.
 
 
 
-### 10.4 Key Breakthrough — Set 40 Thrashing Is a Geometric Problem
+### Key Breakthrough — Set 40 Thrashing Is a Geometric Problem
 
-After settling at 2.98 with all policy variations exhausted at assoc=8, I pasted the trace analyzer output to AI:
+After settling at AMAT 2.98 with all policy variations exhausted at assoc=8, we were stuck. We had tried every combination of SRRIP, BIP, LRU with NextLine and Stride, but nothing broke past roughly 2.80. Not understanding why more sophisticated policies weren't helping, we pasted the full trace analyzer output into Claude and asked: *"Set 40 has 21.53% of all L1 accesses. In windows 3072–4096 there are 20 unique blocks but only 1 set. With assoc=8, what is structurally happening? Why can't SRRIP or BIP fix it?"* Claude replied that *"this is conflict-miss thrashing, not a policy problem. You have 20 blocks mapping to set 40, but the set only has 8 ways. At any moment, only 8 of the 20 can be in cache. The moment block #9 is needed, one of the 8 active blocks is evicted — and that block is almost certainly needed again soon in the same loop. SRRIP helps when some blocks are scan polluters that will never be reused. But here all 20 blocks are reused repeatedly — there is no polluter. BIP similarly cannot help because the eviction is forced by the working set exceeding the set capacity, not by poor ordering. The only structural fix is increasing associativity. Since `TASK3_ASSOC` is configurable in the Makefile, raising from 8 to 32 is the most direct lever."*
 
-> **Me:** *"Set 40 has 21.53% of all L1 accesses. In windows 3072–4096 there are 20 unique blocks but only 1 set. With assoc=8, what is structurally happening? Why can't SRRIP or BIP fix it?"*
->
-> **Copilot:** *"This is conflict-miss thrashing, not a policy problem. You have 20 blocks mapping to set 40, but the set only has 8 ways. At any moment, only 8 of the 20 can be in cache. The moment block #9 is needed, one of the 8 active blocks is evicted — and that block is almost certainly needed again soon in the same loop. SRRIP helps when some blocks are scan polluters that will never be reused. But here all 20 blocks are reused repeatedly — there is no polluter. BIP similarly cannot help because the eviction is forced by the working set exceeding the set capacity, not by poor ordering. The only structural fix is increasing associativity. Since `TASK3_ASSOC` is configurable in the Makefile, raising from 8 to 32 is the most direct lever."*
-
-**This was the breakthrough.** I had been optimizing policies when the problem was geometric. Immediately tested:
+**This was the breakthrough.** We had been thinking about which policy to use, when the actual problem was geometric — the set physically could not hold the hot working set. We immediately tested:
 
 ```
 assoc=16, LRU + NextLine + L2  →  AMAT: 2.45
@@ -498,40 +483,15 @@ assoc=32, LRU + NextLine + L2  →  AMAT: 1.89  ✓
 
 
 
-### 10.5 LRU vs SRRIP at High Associativity
+### LRU vs SRRIP at High Associativity
 
-> **Me:** *"At assoc=32 with LRU + NextLine I get 99.05% L1 hit rate and AMAT 1.89. Should I still try SRRIP, and why might it not help?"*
->
-> **Copilot:** *"With assoc=32, the thrashing bottleneck is resolved — all 20 hot blocks fit comfortably. The scan phases touch 512 unique blocks per window with no intra-window reuse, so any policy evicts blocks that won't return anyway. SRRIP's insert-at-RRPV=2 shines when a scan polluter displaces a hot residual block, but if the working set fits and the prefetcher covers sequential regions, LRU's simple recency ordering is already optimal. The aging overhead in SRRIP adds work without benefit at this associativity."*
-
-Confirmed: SRRIP+NextLine at assoc=32 gave 1.90 cycles; LRU+NextLine gave 1.89.
+With assoc=32 achieving 99.05% L1 hit rate, we still wanted to understand whether SRRIP could squeeze out any further improvement for the scan-heavy phases. We asked Claude: *"At assoc=32 with LRU + NextLine I get 99.05% L1 hit rate and AMAT 1.89. Should I still try SRRIP, and why might it not help?"* Claude reasoned that *"with assoc=32, the thrashing bottleneck is resolved — all 20 hot blocks fit comfortably. The scan phases touch 512 unique blocks per window with no intra-window reuse, so any policy evicts blocks that won't return anyway. SRRIP's insert-at-RRPV=2 shines when a scan polluter displaces a hot residual block, but if the working set fits and the prefetcher covers sequential regions, LRU's simple recency ordering is already optimal. The aging overhead in SRRIP adds work without benefit at this associativity."* This made us understand that the value of an advanced replacement policy is highly context-dependent: SRRIP helps when there is a genuine mix of hot and cold blocks competing for the same ways, but not when the working set fits or when every block in a scan is equally disposable. We confirmed this experimentally — SRRIP+NextLine at assoc=32 gave 1.90 cycles, and LRU+NextLine gave 1.89.
 
 ---
 
 
 
-### 10.6 AI Assistance Summary
-
-| Problem | Initial Assumption | AI Correction | Outcome |
-|---|---|---|---|
-| Prefetch worsened AMAT (27.77) | Higher hit rate always means lower AMAT | Prefetch fills cost 100 cycles without L2 | Enabled L2 first; AMAT → 2.98 |
-| Policies couldn't break 2.8 | Better policy = lower AMAT | Problem was geometric (set capacity) | Raised assoc to 32; AMAT → 1.89 |
-| SRRIP getVictim crashed | Recursion is safe for small depths | Infinite recursion risk; use `while(true)` | Replaced; crash eliminated |
-| LRU vs SRRIP at assoc=32 | SRRIP still helps at high assoc | At high assoc + prefetch, LRU is already optimal | Confirmed; LRU=1.89, SRRIP≈1.90 |
-
----
 
 
 
-## 11. External Resources and AI Usage
-
-We used **GitHub Copilot (Claude Sonnet 4.6)** throughout Task 3 as a primary reasoning partner via the GitHub Copilot Chat interface in VS Code. Specific contributions:
-
-1. **Diagnosing counter-intuitive results** — explaining why prefetch without L2 raised AMAT despite better hit rate.
-2. **Code review for correctness** — identifying the recursive SRRIP `getVictim` as a stack-overflow risk and providing the iterative fix.
-3. **Structural diagnosis** — explaining why no replacement policy can cure a geometric conflict-miss problem, leading directly to the assoc=32 decision.
-4. **Hypothesis validation** — predicting that LRU would match or beat SRRIP at assoc=32, later confirmed by measurement.
-5. **Implementation guidance** — suggesting that BIP's throttle parameter be in the 16–64 range, avoiding over-engineering an arbitrary choice.
-
-No external code was copied verbatim. All implementations were written and verified independently; AI was used for explanation, diagnosis, and review only.
 
